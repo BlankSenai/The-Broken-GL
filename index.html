@@ -3,7 +3,7 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>6:7 GL</title>
+    <title>The Broken GL</title>
     <style>
         * {
             margin: 0;
@@ -175,7 +175,7 @@
     <canvas id="c"></canvas>
 
     <div id="overlay">
-        <h1>6:7 GL</h1>
+        <h1>The Broken GL</h1>
         <p>
             <span class="key">W A S D</span> — mover &nbsp;·&nbsp; <span class="key">SHIFT</span> — correr<br>
             <span class="key">ESPAÇO</span> — pular &nbsp;·&nbsp; <span class="key">MOUSE</span> — olhar (360°
@@ -185,18 +185,16 @@
             <span class="key">1 – 7</span> — selecionar material
         </p>
         <div class="menu">
-            <button id="btn-osm" class="menu-btn">SENAI · Jaraguá do Sul</button>
-            <button id="btn-random" class="menu-btn">Mundo aleatório</button>
+            <button id="btn-cacada" class="menu-btn">Caçada</button>
             <button id="btn-resume" class="menu-btn" style="display:none">Continuar</button>
         </div>
     </div>
 
-    <script src="osm-senai.js"></script>
 
     <div id="hud">
         <div id="xhair"></div>
         <div id="hotbar"></div>
-        <div id="info">6:7 GL<br><span id="pos">—</span><br><span id="blk">—</span></div>
+        <div id="info">The Broken GL<br><span id="pos">—</span><br><span id="blk">—</span></div>
     </div>
 
     <script>
@@ -227,11 +225,11 @@ void main(){
         const FS = `
 precision mediump float;
 uniform sampler2D uTex;
+uniform vec3 uFog;
 varying vec2 vUV; varying float vLight; varying float vFog;
 void main(){
   vec4 c = texture2D(uTex, vUV);
-  vec3 fog = vec3(0.55,0.75,0.95);
-  gl_FragColor = vec4(mix(c.rgb*vLight, fog, vFog), 1.0);
+  gl_FragColor = vec4(mix(c.rgb*vLight, uFog, vFog), 1.0);
 }`;
 
         const VS2 = `attribute vec3 aPos; uniform mat4 uMVP; void main(){ gl_Position=uMVP*vec4(aPos,1.0); }`;
@@ -255,6 +253,10 @@ void main(){
 
         const uMVP = gl.getUniformLocation(prog, 'uMVP');
         const uTex = gl.getUniformLocation(prog, 'uTex');
+        const uFog = gl.getUniformLocation(prog, 'uFog');
+        // Cor de neblina/céu (trocada por mundo); backrooms usa um tom mostarda
+        const SKY = [0.55, 0.75, 0.95];
+        let fogColor = SKY.slice();
         const uMVP2 = gl.getUniformLocation(prog2, 'uMVP');
         const aPos = gl.getAttribLocation(prog, 'aPos');
         const aUV = gl.getAttribLocation(prog, 'aUV');
@@ -292,7 +294,7 @@ void main(){
 
         // ── Texture Atlas ──────────────────────────────────────────────────────────
         // 8 tiles × 16px wide, 2 rows × 16px tall = 128×32 atlas
-        const ATW = 144, ATH = 16, TS = 16, NTILES = 9;
+        const ATW = 208, ATH = 16, TS = 16, NTILES = 13;
 
         function hsh(x, y, s = 0) {
             const n = Math.sin(x * 127.1 + y * 311.7 + s * 74.3) * 43758.5453; return n - Math.floor(n);
@@ -337,6 +339,28 @@ void main(){
                 const w = Math.sin(x * 0.7 + y * 0.5) * 6 + Math.sin(x * 0.3 - y * 0.4) * 5 + hsh(x, y) * 8;
                 return [32 + w, 92 + w * 1.1, 168 + w * 0.6];
             });
+            // ── Concreto / estacionamento ──
+            tile(9, 0, (x, y) => { // concreto de parede/pilar (juntas de forma + manchas)
+                const seam = (x % 8 === 0 || y % 8 === 0) ? -20 : 0;
+                const stain = hsh(x, y, 3) < 0.10 ? -24 : 0;
+                const n = hsh(x, y) * 20, v = 134 + n * .6 + seam + stain;
+                return [v, v, v * 1.04]; // cinza levemente frio
+            });
+            tile(10, 0, (x, y) => { // piso de concreto (rachaduras + óleo)
+                const crack = (Math.abs(((x * 7 + y * 3) % 11) - 5) < 0.6) ? -26 : 0;
+                const oil = hsh(x, y, 5) < 0.07 ? -42 : 0;
+                const n = hsh(x, y) * 16, v = 120 + n * .6 + crack + oil;
+                return [v, v, v * 1.02];
+            });
+            tile(11, 0, (x, y) => { // teto de concreto (juntas de laje)
+                const joint = (x < 1 || y < 1) ? -30 : 0;
+                const n = hsh(x, y) * 12, v = 142 + n * .5 + joint;
+                return [v, v, v * 1.03];
+            });
+            tile(12, 0, (x, y) => { // luminária fluorescente fria (branca, com moldura)
+                const frame = (x < 1 || y < 1 || x > 14 || y > 14) ? -75 : 0;
+                return [250 + frame, 252 + frame, 255 + frame];
+            });
 
             const tex = gl.createTexture();
             gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -349,7 +373,7 @@ void main(){
         }
 
         // ── World ──────────────────────────────────────────────────────────────────
-        const WX = 256, WY = 64, WZ = 256;
+        const WX = 256, WY = 256, WZ = 256;
         const blocks = new Uint8Array(WX * WY * WZ);
         const IDX = (x, y, z) => x + WX * (z + WZ * y);
         function getBlock(x, y, z) {
@@ -368,9 +392,13 @@ void main(){
             if (lz === CSZ - 1 && cz < NCZ - 1) chunks[cIdx(cx, cz + 1)].dirty = true;
         }
 
-        const BNAMES = ['', 'Grama', 'Terra', 'Pedra', 'Tronco', 'Areia', 'Folhas', 'Água'];
+        const BNAMES = ['', 'Grama', 'Terra', 'Pedra', 'Tronco', 'Areia', 'Folhas', 'Água', 'Concreto', 'Laje', 'Teto', 'Luz'];
         // [top, side, bottom] tile indices
-        const BTEX = [null, [0, 1, 2], [2, 2, 2], [3, 3, 3], [5, 4, 5], [6, 6, 6], [7, 7, 7], [8, 8, 8]];
+        // Laje (9) = piso por cima / teto por baixo (serve de chão de um andar e teto do de baixo)
+        const BTEX = [null, [0, 1, 2], [2, 2, 2], [3, 3, 3], [5, 4, 5], [6, 6, 6], [7, 7, 7], [8, 8, 8],
+            [9, 9, 9], [10, 10, 11], [11, 11, 11], [12, 12, 12]];
+        // Blocos emissivos (full-bright, ignoram a sombra por face) — luz do backrooms
+        const BEMIT = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
 
         // RNG determinístico (mulberry32)
         function mulberry32(seed) {
@@ -384,241 +412,133 @@ void main(){
             };
         }
 
-        // Simplex Noise 2D (Stefan Gustavson)
-        function makeSimplex2D(rng) {
-            const p = new Uint8Array(256);
-            for (let i = 0; i < 256; i++) p[i] = i;
-            for (let i = 255; i > 0; i--) {
-                const j = (rng() * (i + 1)) | 0;
-                const t = p[i]; p[i] = p[j]; p[j] = t;
-            }
-            const perm = new Uint8Array(512);
-            for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
-            const F2 = 0.5 * (Math.sqrt(3) - 1);
-            const G2 = (3 - Math.sqrt(3)) / 6;
-            const grad = [[1, 1], [-1, 1], [1, -1], [-1, -1], [1, 0], [-1, 0], [0, 1], [0, -1]];
-            return function (x, y) {
-                const s = (x + y) * F2;
-                const i = Math.floor(x + s), j = Math.floor(y + s);
-                const t = (i + j) * G2;
-                const x0 = x - (i - t), y0 = y - (j - t);
-                const i1 = x0 > y0 ? 1 : 0, j1 = x0 > y0 ? 0 : 1;
-                const x1 = x0 - i1 + G2, y1 = y0 - j1 + G2;
-                const x2 = x0 - 1 + 2 * G2, y2 = y0 - 1 + 2 * G2;
-                const ii = i & 255, jj = j & 255;
-                const g0 = grad[perm[ii + perm[jj]] & 7];
-                const g1 = grad[perm[ii + i1 + perm[jj + j1]] & 7];
-                const g2 = grad[perm[ii + 1 + perm[jj + 1]] & 7];
-                let n0 = 0, n1 = 0, n2 = 0;
-                let tt = 0.5 - x0 * x0 - y0 * y0;
-                if (tt >= 0) { tt *= tt; n0 = tt * tt * (g0[0] * x0 + g0[1] * y0); }
-                tt = 0.5 - x1 * x1 - y1 * y1;
-                if (tt >= 0) { tt *= tt; n1 = tt * tt * (g1[0] * x1 + g1[1] * y1); }
-                tt = 0.5 - x2 * x2 - y2 * y2;
-                if (tt >= 0) { tt *= tt; n2 = tt * tt * (g2[0] * x2 + g2[1] * y2); }
-                return 70 * (n0 + n1 + n2);
-            };
-        }
-
-        // Fractal Brownian motion
-        function fbm(noise, x, y, oct, lac, gain) {
-            let amp = 1, freq = 1, sum = 0, norm = 0;
-            for (let i = 0; i < oct; i++) {
-                sum += amp * noise(x * freq, y * freq);
-                norm += amp;
-                amp *= gain; freq *= lac;
-            }
-            return sum / norm;
-        }
 
         let worldSeed = 0;
+        let spawnHint = null; // {x,y,z} opcional para mundos com spawn fixo (ex.: backrooms)
 
-        function genWorldRandom() {
+
+        // ── Garagem / níveis (geração procedural) ───────────────────────────────────
+        // Vários andares de estacionamento de concreto empilhados. Cada andar é um
+        // labirinto (recursive-backtracker + braiding) com salões abertos ("salas
+        // variadas"); andares ligados por escadas. Skin de concreto, luz fluorescente
+        // fria e névoa cinza pesada.
+        function genWorldBackrooms() {
             worldSeed = (Math.random() * 0x7fffffff) | 0;
-            const rngH = mulberry32(worldSeed);
-            const rngM = mulberry32(worldSeed ^ 0x9E3779B9);
-            const rngT = mulberry32(worldSeed ^ 0xC0FFEE);
-            const noiseH = makeSimplex2D(rngH);
-            const noiseM = makeSimplex2D(rngM);
-
+            const rng = mulberry32(worldSeed);
             blocks.fill(0);
-            const SEA = 14;
-            // Biomas: 0=planície, 1=floresta, 2=deserto, 3=montanha, 4=praia
-            const heightMap = new Int16Array(WX * WZ);
-            const biomeMap = new Uint8Array(WX * WZ);
+            fogColor = [0.18, 0.19, 0.22]; // ar cinza pesado de garagem
 
-            for (let z = 0; z < WZ; z++) for (let x = 0; x < WX; x++) {
-                const e = fbm(noiseH, x * 0.012, z * 0.012, 5, 2.0, 0.5);
-                const m = fbm(noiseM, x * 0.018 + 1000, z * 0.018 + 1000, 3, 2.0, 0.5);
-                const h = Math.max(1, Math.min(WY - 2, SEA + Math.round(e * 18)));
-                const submerged = h < SEA;
+            const CELL = 5, WALL = 1, P = CELL + WALL;
+            const INT = 4, LH = INT + 2;     // interior + divisória de 2 lajes (teto + chão)
+            const NF = 3;                     // andares
+            const GR = 16;                    // células por lado (menor = menos difícil)
+            const SPAN = GR * P + 1;
+            const OFF = Math.floor((WX - SPAN) / 2);
+            const WALL_ID = 8, SLAB_ID = 9, LIGHT_ID = 11;
+            const sc = (GR / 2) | 0;          // célula central (spawn)
+            const floorY = f => f * LH;             // laje de chão do andar f
+            const ceilY = f => f * LH + INT + 1;    // laje de teto do andar f (1 bloco acima fica o chão do de cima)
+            const slab = (y) => { for (let z = 0; z < SPAN; z++) for (let x = 0; x < SPAN; x++) setBlock(OFF + x, y, OFF + z, SLAB_ID); };
+            const pillarAt = (x, z, yF) => { for (let y = yF + 1; y <= yF + INT; y++) setBlock(x, y, z, WALL_ID); };
+            const clearCol = (x, z, yF) => { for (let y = yF + 1; y <= yF + INT; y++) setBlock(x, y, z, 0); };
 
-                let bio;
-                if (h <= SEA + 1) bio = 4;          // praia / fundo de água
-                else if (h > SEA + 14) bio = 3;     // montanha
-                else if (m < -0.15) bio = 2;        // deserto
-                else if (m > 0.25) bio = 1;         // floresta
-                else bio = 0;                       // planície
+            // Lajes: chão e teto de cada andar (divisória entre andares = 2 blocos)
+            for (let f = 0; f < NF; f++) { slab(floorY(f)); slab(ceilY(f)); }
 
-                heightMap[x + z * WX] = h;
-                biomeMap[x + z * WX] = bio;
-
-                for (let y = 0; y <= h; y++) {
-                    let b;
-                    if (y < h - 4) b = 3;                            // fundo: pedra
-                    else if (y < h) b = (bio === 2 || bio === 4) ? 5 : 2;  // sub-topo: areia ou terra
-                    else if (bio === 4 || bio === 2) b = 5;          // topo: areia
-                    else if (bio === 3) b = 3;                       // topo: pedra (montanha)
-                    else b = 1;                                      // topo: grama
-                    setBlock(x, y, z, b);
+            for (let f = 0; f < NF; f++) {
+                const yF = floorY(f);
+                // Maze por andar
+                const visited = Array.from({ length: GR }, () => new Array(GR).fill(false));
+                const wallRight = Array.from({ length: GR }, () => new Array(GR).fill(true));
+                const wallDown = Array.from({ length: GR }, () => new Array(GR).fill(true));
+                visited[sc][sc] = true;
+                const stack = [[sc, sc]];
+                while (stack.length) {
+                    const [cx, cz] = stack[stack.length - 1];
+                    const nb = [];
+                    if (cx > 0 && !visited[cx - 1][cz]) nb.push([cx - 1, cz, 'L']);
+                    if (cx < GR - 1 && !visited[cx + 1][cz]) nb.push([cx + 1, cz, 'R']);
+                    if (cz > 0 && !visited[cx][cz - 1]) nb.push([cx, cz - 1, 'U']);
+                    if (cz < GR - 1 && !visited[cx][cz + 1]) nb.push([cx, cz + 1, 'D']);
+                    if (!nb.length) { stack.pop(); continue; }
+                    const [nx, nz, dir] = nb[(rng() * nb.length) | 0];
+                    if (dir === 'R') wallRight[cx][cz] = false;
+                    else if (dir === 'L') wallRight[nx][nz] = false;
+                    else if (dir === 'D') wallDown[cx][cz] = false;
+                    else wallDown[nx][nz] = false;
+                    visited[nx][nz] = true; stack.push([nx, nz]);
                 }
-                // Preenche água até o nível do mar
-                if (submerged) for (let y = h + 1; y <= SEA; y++) setBlock(x, y, z, 7);
-            }
-
-            // Árvores: probabilidade por bioma
-            for (let z = 2; z < WZ - 2; z++) for (let x = 2; x < WX - 2; x++) {
-                const bio = biomeMap[x + z * WX];
-                let p = 0;
-                if (bio === 1) p = 0.07;        // floresta densa
-                else if (bio === 0) p = 0.008;  // planície esparsa
-                else continue;
-
-                if (rngT() >= p) continue;
-                const h = heightMap[x + z * WX];
-                if (getBlock(x, h, z) !== 1) continue;
-
-                const th = 4 + ((rngT() * 3) | 0);
-                for (let hi = 1; hi <= th; hi++) setBlock(x, h + hi, z, 4);
-                for (let dy = -2; dy <= 2; dy++) for (let dz = -3; dz <= 3; dz++) for (let dx = -3; dx <= 3; dx++) {
-                    if (dx === 0 && dz === 0 && dy < 1) continue;
-                    if (dx * dx + dz * dz + dy * dy <= 9 && !getBlock(x + dx, h + th + dy, z + dz))
-                        setBlock(x + dx, h + th + dy, z + dz, 6);
+                // Braiding (salas + loops)
+                const BRAID = 0.35;
+                for (let cx = 0; cx < GR; cx++) for (let cz = 0; cz < GR; cz++) {
+                    if (cx < GR - 1 && wallRight[cx][cz] && rng() < BRAID) wallRight[cx][cz] = false;
+                    if (cz < GR - 1 && wallDown[cx][cz] && rng() < BRAID) wallDown[cx][cz] = false;
                 }
-            }
-
-            console.log('6:7 GL — mundo gerado com seed:', worldSeed);
-        }
-
-        // ── OSM loader ─────────────────────────────────────────────────────────────
-        function genWorldOSM(data) {
-            blocks.fill(0);
-            const GROUND = 14;
-
-            // Normaliza geometry pra arrays [lat, lon] (aceita {lat, lon} ou [lat, lon])
-            const getPt = p => Array.isArray(p) ? p : [p.lat, p.lon];
-
-            // Bbox
-            let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
-            for (const el of data.elements) {
-                if (!el.geometry) continue;
-                for (const p of el.geometry) {
-                    const [lat, lon] = getPt(p);
-                    if (lat < minLat) minLat = lat;
-                    if (lat > maxLat) maxLat = lat;
-                    if (lon < minLon) minLon = lon;
-                    if (lon > maxLon) maxLon = lon;
+                // Postes (cruzamentos)
+                for (let i = 0; i <= GR; i++) for (let j = 0; j <= GR; j++) pillarAt(OFF + i * P, OFF + j * P, yF);
+                // Paredes verticais
+                for (let i = 0; i <= GR; i++) for (let cz = 0; cz < GR; cz++) {
+                    const present = (i === 0 || i === GR) ? true : wallRight[i - 1][cz];
+                    if (!present) continue;
+                    const x = OFF + i * P;
+                    for (let k = 1; k <= CELL; k++) pillarAt(x, OFF + cz * P + k, yF);
                 }
-            }
-            const cosLat = Math.cos(((minLat + maxLat) / 2) * Math.PI / 180);
-            const widthM = (maxLon - minLon) * 111320 * cosLat;
-            const heightM = (maxLat - minLat) * 111320;
-            const margin = 8;
-            const mpb = Math.max(widthM, heightM) / (Math.min(WX, WZ) - margin * 2);
-            const offX = (WX - widthM / mpb) / 2;
-            const offZ = (WZ - heightM / mpb) / 2;
-
-            const toBlock = (lat, lon) => {
-                const dx = (lon - minLon) * 111320 * cosLat / mpb;
-                const dz = (maxLat - lat) * 111320 / mpb;
-                return [offX + dx, offZ + dz];
-            };
-
-            // Chão de grama
-            for (let z = 0; z < WZ; z++) for (let x = 0; x < WX; x++) {
-                setBlock(x, 0, z, 3);
-                for (let y = 1; y < GROUND - 2; y++) setBlock(x, y, z, 3);
-                setBlock(x, GROUND - 2, z, 2);
-                setBlock(x, GROUND - 1, z, 2);
-                setBlock(x, GROUND, z, 1);
-            }
-
-            // Helper: rasterizar linha grossa (rua)
-            function drawStreet(geometry, widthMeters, mat) {
-                const r = Math.max(1, Math.round((widthMeters / 2) / mpb));
-                const pts = geometry.map(p => { const [lat, lon] = getPt(p); return toBlock(lat, lon); });
-                for (let i = 0; i < pts.length - 1; i++) {
-                    const [x0, z0] = pts[i], [x1, z1] = pts[i + 1];
-                    const dx = x1 - x0, dz = z1 - z0;
-                    const steps = Math.max(1, Math.ceil(Math.max(Math.abs(dx), Math.abs(dz))));
-                    for (let s = 0; s <= steps; s++) {
-                        const t = s / steps;
-                        const cx = Math.round(x0 + dx * t);
-                        const cz = Math.round(z0 + dz * t);
-                        for (let oz = -r; oz <= r; oz++) for (let ox = -r; ox <= r; ox++) {
-                            if (ox * ox + oz * oz > r * r) continue;
-                            const bx = cx + ox, bz = cz + oz;
-                            if (bx < 0 || bx >= WX || bz < 0 || bz >= WZ) continue;
-                            setBlock(bx, GROUND, bz, mat);
-                        }
-                    }
+                // Paredes horizontais
+                for (let j = 0; j <= GR; j++) for (let cx = 0; cx < GR; cx++) {
+                    const present = (j === 0 || j === GR) ? true : wallDown[cx][j - 1];
+                    if (!present) continue;
+                    const z = OFF + j * P;
+                    for (let k = 1; k <= CELL; k++) pillarAt(OFF + cx * P + k, z, yF);
+                }
+                // Salas variadas: abre salões (limpa o interior de retângulos de células)
+                const nHalls = 3 + (rng() * 3 | 0);
+                for (let h = 0; h < nHalls; h++) {
+                    const w = 2 + (rng() * 2 | 0), d = 2 + (rng() * 2 | 0);
+                    const c0 = 1 + (rng() * (GR - w - 1) | 0), r0 = 1 + (rng() * (GR - d - 1) | 0);
+                    const x0 = OFF + c0 * P + 1, x1 = OFF + (c0 + w) * P - 1;
+                    const z0 = OFF + r0 * P + 1, z1 = OFF + (r0 + d) * P - 1;
+                    for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) clearCol(x, z, yF);
+                }
+                // Luminárias EMBUTIDAS no teto (flush): tira de 3 em ~70% das células
+                const cy = ceilY(f);
+                for (let cx = 0; cx < GR; cx++) for (let cz = 0; cz < GR; cz++) {
+                    if (rng() >= 0.70) continue;
+                    const z = OFF + cz * P + 3;
+                    for (let k = 2; k <= 4; k++) setBlock(OFF + cx * P + k, cy, z, LIGHT_ID);
                 }
             }
 
-            function pointInPoly(px, pz, poly) {
-                let inside = false;
-                for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-                    const [xi, zi] = poly[i], [xj, zj] = poly[j];
-                    if (((zi > pz) !== (zj > pz)) && (px < (xj - xi) * (pz - zi) / (zj - zi) + xi))
-                        inside = !inside;
+            // Constrói uma escada do andar f para o f+1 (vão vertical aberto + degraus)
+            function buildStair(f, cx, cz) {
+                const yF = floorY(f);
+                const bx = OFF + cx * P + 1, bz = OFF + cz * P + 2; // 2 de largura (bz, bz+1)
+                // Abre o poço nos interiores dos dois andares
+                for (let dz = -1; dz <= 2; dz++) for (let dx = -1; dx <= 6; dx++) {
+                    clearCol(bx + dx, bz + dz, yF);
+                    clearCol(bx + dx, bz + dz, yF + LH);
                 }
-                return inside;
-            }
-
-            function drawBuilding(geometry, levels, mat) {
-                const poly = geometry.map(p => { const [lat, lon] = getPt(p); return toBlock(lat, lon); });
-                let xmin = Infinity, xmax = -Infinity, zmin = Infinity, zmax = -Infinity;
-                for (const [px, pz] of poly) {
-                    if (px < xmin) xmin = px; if (px > xmax) xmax = px;
-                    if (pz < zmin) zmin = pz; if (pz > zmax) zmax = pz;
+                // Fura as DUAS lajes da divisória sobre o vão (teto de f + chão de f+1)
+                for (let dz = 0; dz <= 1; dz++) for (let dx = 0; dx <= 5; dx++) {
+                    setBlock(bx + dx, ceilY(f), bz + dz, 0);
+                    setBlock(bx + dx, floorY(f + 1), bz + dz, 0);
                 }
-                xmin = Math.max(0, Math.floor(xmin));
-                xmax = Math.min(WX - 1, Math.ceil(xmax));
-                zmin = Math.max(0, Math.floor(zmin));
-                zmax = Math.min(WZ - 1, Math.ceil(zmax));
-                const hBlocks = Math.max(2, Math.round((levels * 3) / mpb));
-                for (let bz = zmin; bz <= zmax; bz++) for (let bx = xmin; bx <= xmax; bx++) {
-                    if (!pointInPoly(bx + 0.5, bz + 0.5, poly)) continue;
-                    for (let y = GROUND + 1; y <= GROUND + hBlocks; y++) {
-                        setBlock(bx, y, bz, mat);
-                    }
-                }
+                // Degraus de concreto subindo (topos yF+2 .. yF+6)
+                for (let i = 1; i <= INT + 1; i++) for (let dz = 0; dz <= 1; dz++) setBlock(bx + i - 1, yF + i, bz + dz, WALL_ID);
+                // Pouso: recoloca o chão do andar de cima logo após o último degrau
+                for (let dz = 0; dz <= 1; dz++) setBlock(bx + INT + 1, floorY(f + 1), bz + dz, SLAB_ID);
             }
 
-            // Ruas (por baixo)
-            for (const el of data.elements) {
-                const t = el.tags; if (!t || el.type !== 'way') continue;
-                if (!t.highway) continue;
-                const hw = t.highway;
-                if (hw === 'residential') drawStreet(el.geometry, parseFloat(t.width) || 8, 3);
-                else if (hw === 'living_street') drawStreet(el.geometry, parseFloat(t.width) || 5, 5);
-                else if (hw === 'service') drawStreet(el.geometry, parseFloat(t.width) || 4, 5);
+            // Escadas: uma garantida ao lado do spawn + algumas aleatórias por andar
+            for (let f = 0; f < NF - 1; f++) {
+                if (f === 0) buildStair(0, sc + 1, sc);
+                const extra = 3;
+                for (let s = 0; s < extra; s++) buildStair(f, 1 + (rng() * (GR - 2) | 0), 1 + (rng() * (GR - 2) | 0));
             }
 
-            // Prédios
-            for (const el of data.elements) {
-                const t = el.tags; if (!t || el.type !== 'way') continue;
-                if (!t.building || t.building === 'roof') continue;
-                const lvl = parseInt(t['building:levels']) ||
-                    (t.building === 'apartments' ? 4 : t.building === 'school' || t.building === 'public' ? 3 : 2);
-                let mat = 2; // terra (residencial)
-                if (t.building === 'school' || t.building === 'public') mat = 3; // pedra
-                else if (t.building === 'commercial') mat = 5; // areia
-                else if (t.building === 'apartments') mat = 3; // pedra
-                drawBuilding(el.geometry, lvl, mat);
-            }
-
-            console.log('6:7 GL — mapa SENAI carregado. Escala:', mpb.toFixed(2), 'm/bloco');
+            // Spawn no centro do andar 0 (limpa a célula pra garantir lugar livre)
+            for (let dz = 1; dz <= CELL; dz++) for (let dx = 1; dx <= CELL; dx++) clearCol(OFF + sc * P + dx, OFF + sc * P + dz, 0);
+            spawnHint = { x: OFF + sc * P + 3 + 0.5, y: 1.05, z: OFF + sc * P + 3 + 0.5 };
+            console.log('The Broken GL — garagem gerada. seed:', worldSeed, `${NF} andares ${GR}x${GR}`);
         }
 
         // ── Mesh ───────────────────────────────────────────────────────────────────
@@ -643,14 +563,15 @@ void main(){
             const x0 = cx * CSX, z0 = cz * CSZ;
             for (let y = 0; y < WY; y++) for (let z = z0; z < z0 + CSZ; z++) for (let x = x0; x < x0 + CSX; x++) {
                 const b = getBlock(x, y, z); if (!b) continue;
-                const bt = BTEX[b];
+                const bt = BTEX[b], emit = BEMIT[b];
                 for (const f of FACES) {
                     if (getBlock(x + f.ox, y + f.oy, z + f.oz)) continue;
                     const ti = bt[f.ts];
                     const u0 = ti / NTILES, ud = 1 / NTILES;
+                    const lt = emit ? 1.5 : f.lt;
                     for (const idx of [0, 1, 2, 0, 2, 3]) {
                         const [dx, dy, dz] = f.v[idx], [su, sv] = f.u[idx];
-                        tmp.push(x + dx, y + dy, z + dz, u0 + su * ud, sv, f.lt);
+                        tmp.push(x + dx, y + dy, z + dz, u0 + su * ud, sv, lt);
                     }
                 }
             }
@@ -683,7 +604,7 @@ void main(){
 
         // ── Camera / Player ────────────────────────────────────────────────────────
         const cam = { x: 32.5, y: 0, z: 32.5, yaw: 0.5, pitch: 0, vy: 0, onGround: false };
-        const EYE_STAND = 1.62, EYE_CROUCH = 0.8, PW = 0.28, PH = 1.8, GRAV = 22, JMPV = 8.5;
+        const EYE_STAND = 1.62, EYE_CROUCH = 0.8, PW = 0.28, PH = 1.8, GRAV = 22, JMPV = 8.5, STEP = 1.02;
         let eyeOffset = EYE_STAND; // animado suavemente
 
         function collidesAt(x, y, z) {
@@ -793,8 +714,10 @@ void main(){
 
             const nx = cam.x + mx;
             if (!collidesAt(nx, cam.y, cam.z)) cam.x = nx;
+            else if (cam.onGround && !collidesAt(cam.x, cam.y + STEP, cam.z) && !collidesAt(nx, cam.y + STEP, cam.z)) { cam.x = nx; cam.y += STEP; } // sobe degrau de 1 bloco
             const nz = cam.z + mz;
             if (!collidesAt(cam.x, cam.y, nz)) cam.z = nz;
+            else if (cam.onGround && !collidesAt(cam.x, cam.y + STEP, cam.z) && !collidesAt(cam.x, cam.y + STEP, nz)) { cam.z = nz; cam.y += STEP; }
 
             // Clamp to world
             cam.x = Math.max(0.5, Math.min(WX - 0.5, cam.x));
@@ -845,7 +768,7 @@ void main(){
 
         function render() {
             gl.viewport(0, 0, canvas.width, canvas.height);
-            gl.clearColor(0.55, 0.75, 0.95, 1);
+            gl.clearColor(fogColor[0], fogColor[1], fogColor[2], 1);
             gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
             gl.enable(gl.DEPTH_TEST);
             gl.disable(gl.CULL_FACE); // safe across all winding
@@ -862,6 +785,7 @@ void main(){
             gl.useProgram(prog);
             gl.uniformMatrix4fv(uMVP, false, mvp);
             gl.uniform1i(uTex, 0);
+            gl.uniform3fv(uFog, fogColor);
             gl.enableVertexAttribArray(aPos);
             gl.enableVertexAttribArray(aUV);
             gl.enableVertexAttribArray(aLt);
@@ -901,24 +825,29 @@ void main(){
         const btnResume = document.getElementById('btn-resume');
 
         function startWorld(loader) {
+            spawnHint = null;
             loader();
-            // Find spawn at center
-            let sy = WY - 1;
-            const sx = WX / 2 | 0, sz = WZ / 2 | 0;
-            while (sy > 0 && (!getBlock(sx, sy, sz) || getBlock(sx, sy, sz) === 7)) sy--;
-            cam.y = sy + 1.5; cam.x = sx + 0.5; cam.z = sz + 0.5;
+            if (spawnHint) {
+                cam.x = spawnHint.x; cam.y = spawnHint.y; cam.z = spawnHint.z;
+                spawnHint = null;
+            } else {
+                // Find spawn at center (desce do topo até achar o solo)
+                let sy = WY - 1;
+                const sx = WX / 2 | 0, sz = WZ / 2 | 0;
+                while (sy > 0 && (!getBlock(sx, sy, sz) || getBlock(sx, sy, sz) === 7)) sy--;
+                cam.y = sy + 1.5; cam.x = sx + 0.5; cam.z = sz + 0.5;
+            }
             cam.vy = 0; cam.onGround = false;
             rebuildAllDirty();
             btnResume.style.display = '';
             canvas.requestPointerLock();
         }
 
-        document.getElementById('btn-random').onclick = () => startWorld(genWorldRandom);
-        document.getElementById('btn-osm').onclick = () => {
-            if (!window.OSM_SENAI) { alert('osm-senai.js não carregou.'); return; }
-            startWorld(() => genWorldOSM(window.OSM_SENAI));
-        };
+        document.getElementById('btn-cacada').onclick = () => startWorld(genWorldBackrooms);
         btnResume.onclick = () => canvas.requestPointerLock();
+
+        // Auto-load: abre direto no modo Caçada
+        startWorld(genWorldBackrooms);
 
         let last = 0;
         function frame(t) {
