@@ -205,6 +205,16 @@
             background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0) 30%, rgba(55, 0, 0, 0.55) 70%, rgba(12, 0, 0, 0.92) 100%);
         }
 
+        /* ── Vinheta da caçada (fase 2) — âmbar/dourado, a cor dos itens ── */
+        #vignette-hunt {
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: 7;
+            opacity: 0;
+            background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0) 30%, rgba(165, 140, 20, 0.5) 70%, rgba(40, 33, 0, 0.92) 100%);
+        }
+
         /* ── Tela de "pego" (derrota) ── */
         #caught {
             position: fixed;
@@ -245,6 +255,60 @@
             opacity: 0;
             pointer-events: none;
         }
+
+        /* ── Tela de vitória (jogador pegou a entidade) ── */
+        #victory {
+            position: fixed;
+            inset: 0;
+            background: #000;
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 22px;
+            text-align: center;
+            z-index: 30;
+            font-family: 'Courier New', monospace;
+        }
+
+        #victory h2 {
+            color: rgba(90, 220, 120, 0.96);
+            font-size: clamp(34px, 8vw, 92px);
+            font-weight: 100;
+            letter-spacing: 10px;
+            text-shadow: 0 0 26px rgba(40, 200, 90, 0.4);
+        }
+
+        #victory .vtime-label {
+            color: rgba(255, 255, 255, 0.4);
+            font-size: 11px;
+            letter-spacing: 3px;
+            text-transform: uppercase;
+        }
+
+        #victory .vtime {
+            color: rgba(255, 255, 255, 0.92);
+            font: bold 40px 'Courier New';
+            letter-spacing: 2px;
+            text-shadow: 2px 2px 0 #000;
+        }
+
+        /* ── Banner de virada de fase ── */
+        #phase-banner {
+            position: absolute;
+            top: 38%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            font: 100 clamp(20px, 4vw, 40px) 'Courier New';
+            letter-spacing: 6px;
+            color: rgba(90, 220, 120, 0.95);
+            text-shadow: 0 0 18px rgba(0, 0, 0, 0.85);
+            opacity: 0;
+            transition: opacity 0.6s linear;
+            pointer-events: none;
+            white-space: nowrap;
+        }
     </style>
 </head>
 
@@ -259,7 +323,7 @@
             colete os <span class="key">2 itens</span> e fuja da entidade
         </p>
         <div class="menu">
-            <button id="btn-cacada" class="menu-btn">Caçada</button>
+            <button id="btn-cacada" class="menu-btn">Nova Caçada</button>
             <button id="btn-resume" class="menu-btn" style="display:none">Continuar</button>
         </div>
     </div>
@@ -272,9 +336,11 @@
         <div id="stamina-bar-container">
             <div id="stamina-bar"></div>
         </div>
+        <div id="phase-banner"></div>
         <div id="debug-markers" style="position:absolute; inset:0; pointer-events:none; z-index:8;">
             <div id="marker-6" style="position:absolute; display:none; color:#3f7; font:bold 14px 'Courier New'; text-shadow:0 0 5px #000; transform:translate(-50%,-50%);"></div>
             <div id="marker-7" style="position:absolute; display:none; color:#3f7; font:bold 14px 'Courier New'; text-shadow:0 0 5px #000; transform:translate(-50%,-50%);"></div>
+            <div id="marker-ent" style="position:absolute; display:none; color:#5e6; font:bold 15px 'Courier New'; text-shadow:0 0 6px #000, 0 0 3px #000; transform:translate(-50%,-50%);"></div>
         </div>
     </div>
 
@@ -284,6 +350,7 @@
     </div>
 
     <div id="vignette"></div>
+    <div id="vignette-hunt"></div>
 
     <div id="caught">
         <div id="caught-msg">
@@ -293,6 +360,15 @@
     </div>
 
     <img id="caught-flash" alt="">
+
+    <div id="victory">
+        <h2>vitória</h2>
+        <div>
+            <div class="vtime-label">tempo da caçada</div>
+            <div class="vtime" id="victory-time">00:00:000</div>
+        </div>
+        <button id="victory-restart" class="menu-btn">Nova Caçada</button>
+    </div>
 
     <script>
         'use strict';
@@ -532,6 +608,17 @@ void main(){
         let gameStartTime = 0, gameRunning = false;
         let playerStamina = 10.0, playerExhausted = false;
         let showMarkers = false; // marcadores de debug dos itens (tecla "ç")
+        // ── Estado da inversão (fase 2: o jogador caça a entidade) ──
+        let reversed = false, won = false, huntGraceTimer = 0;
+        let entityStamina = 10.0, entityExhausted = false;
+
+        // mm:ss:mmm a partir de um intervalo em ms
+        function fmtTime(el) {
+            const m = String(Math.floor(el / 60000)).padStart(2, '0');
+            const s = String(Math.floor((el % 60000) / 1000)).padStart(2, '0');
+            const ms = String(Math.floor(el % 1000)).padStart(3, '0');
+            return `${m}:${s}:${ms}`;
+        }
 
 
         // ── Garagem / níveis (geração procedural) ───────────────────────────────────
@@ -761,12 +848,18 @@ void main(){
         const ENT_EYE = 1.5, ENT_H = 2.2, ENT_R = 0.3, BODY_ASPECT = 318 / 1108;
         const SPD_WANDER = 2.6, SPD_SEARCH = 5.2, SPD_CHASE = 6.8; // perseguição: > andar(5.0), < correr(8.5)
         const SIGHT = 42, SEARCH_TIME = 4.0, CATCH_DIST = 0.95;
+        // ── Fase 2 (caçada invertida): jogador com velocidade fixa, entidade com estamina ──
+        const PLAYER_HUNT_SPD = 6.5;                       // velocidade fixa do jogador caçador
+        const SPD_FLEE_RUN = 7.5, SPD_FLEE_WALK = 3.5;     // presa: sprintando vs exausta
+        const FLEE_SPRINT_DIST = 16, STAM_RECOVER = 1.5;   // sprinta se o caçador <16 blocos; recupera 1.5/s
+        const CATCH_DIST_HUNT = 1.2, HUNT_GRACE = 1.2;     // encostar p/ vencer; respiro inicial da presa
         let entSpawnHint = null, navFloorY = [];
         const entity = {
             x: 0, y: 0, z: 0, vy: 0, onGround: false,
             state: 'wander', target: { x: 0, y: 0, z: 0 }, lastSeen: { x: 0, y: 0, z: 0 },
             searchTimer: 0, stuck: 0, visible: false, visFrac: 0,
-            path: null, pathIdx: 0, pathTimer: 0
+            path: null, pathIdx: 0, pathTimer: 0,
+            fleeTarget: null, fleeRetime: 0
         };
 
         const entEl = document.getElementById('entity');
@@ -843,12 +936,35 @@ void main(){
             return { x: entity.x, y: Math.round(entity.y), z: entity.z };
         }
 
+        // Destino de fuga: ponto andável na direção OPOSTA ao jogador a partir da entidade.
+        // Priorizar o alinhamento (e não só a distância bruta) evita escolher um ponto do outro
+        // lado do jogador — cuja rota do A* passaria por cima dele.
+        function pickFleeTarget() {
+            let ax = entity.x - cam.x, az = entity.z - cam.z;          // sentido "para longe do jogador"
+            const al = Math.hypot(ax, az) || 1; ax /= al; az /= al;
+            let best = null, bestScore = -Infinity;
+            for (let k = 0; k < 48; k++) {
+                const fy = navFloorY.length ? navFloorY[(Math.random() * navFloorY.length) | 0] : Math.round(entity.y);
+                const tx = 2 + Math.random() * (WX - 4), tz = 2 + Math.random() * (WZ - 4);
+                if (!navWalkable(Math.floor(tx), fy, Math.floor(tz))) continue;
+                const dPlayer = Math.hypot(tx - cam.x, tz - cam.z);
+                if (dPlayer < 8) continue;                              // nunca foge pra perto do jogador
+                let cx = tx - entity.x, cz = tz - entity.z;
+                const cl = Math.hypot(cx, cz) || 1;
+                const align = (cx / cl) * ax + (cz / cl) * az;          // 1 = direto pra longe; -1 = rumo a ele
+                const score = align * 14 + dPlayer * 0.5 - cl * 0.15;   // alinhamento manda; recompensa distância
+                if (score > bestScore) { bestScore = score; best = { x: tx, y: fy, z: tz }; }
+            }
+            return best || pickWanderTarget();
+        }
+
         function placeEntity() {
             if (entSpawnHint) { entity.x = entSpawnHint.x; entity.y = entSpawnHint.y; entity.z = entSpawnHint.z; entSpawnHint = null; }
             else { entity.x = 4.5; entity.z = 4.5; let sy = WY - 1; while (sy > 0 && !getBlock(4, sy, 4)) sy--; entity.y = sy + 1.05; }
             entity.vy = 0; entity.onGround = false; entity.state = 'wander';
             entity.target = pickWanderTarget(); entity.searchTimer = 0; entity.stuck = 0; entity.visible = false;
             entity.path = null; entity.pathIdx = 0; entity.pathTimer = 0;
+            entity.fleeTarget = null; entity.fleeRetime = 0;
         }
 
         // ── Navegação por nós (A* na grade de blocos) ───────────────────────────────
@@ -916,41 +1032,69 @@ void main(){
         function updateEntity(dt) {
             if (!locked || caught) { entity.visible = false; entity.visFrac = 0; return; }
 
-            // Percepção (fração visível -> oclusão parcial aproximada)
+            // Percepção (fração visível -> oclusão parcial aproximada) — comum às duas fases
             entity.visFrac = entVisibility();
-            const see = entity.visFrac > 0.15;
-            entity.visible = see;
-            if (see) {
-                entity.lastSeen.x = cam.x; entity.lastSeen.y = cam.y; entity.lastSeen.z = cam.z;
-                entity.state = 'chase'; entity.searchTimer = SEARCH_TIME;
-            } else if (entity.state === 'chase') {
-                entity.state = 'search'; // acabou de perder a visão
-            }
+            entity.visible = entity.visFrac > 0.15;
 
-            // Alvo + velocidade conforme estado
-            let tx, tz, spd;
-            if (entity.state === 'chase') { tx = cam.x; tz = cam.z; spd = SPD_CHASE; }
-            else if (entity.state === 'search') {
-                tx = entity.lastSeen.x; tz = entity.lastSeen.z; spd = SPD_SEARCH;
-                entity.searchTimer -= dt;
-                if (entity.searchTimer <= 0 || Math.hypot(entity.x - tx, entity.z - tz) < 1.5) {
-                    entity.state = 'wander'; entity.target = pickWanderTarget(); entity.path = null;
-                }
-            } else { // wander
-                tx = entity.target.x; tz = entity.target.z; spd = SPD_WANDER;
-                // chegou = perto no plano E no mesmo andar (senão repicaria antes de subir)
-                const reached = Math.hypot(entity.x - tx, entity.z - tz) < 1.6 && Math.abs(entity.y - entity.target.y) < 1.6;
-                if (reached || entity.stuck > 1.2) {
-                    entity.target = pickWanderTarget(); entity.stuck = 0; entity.path = null;
-                }
-            }
+            let tx, tz, spd, goalY;
 
-            // ── Navegação por caminho (A*) até o alvo do estado ──
-            const goalY = entity.state === 'chase' ? Math.round(cam.y)
-                : entity.state === 'search' ? Math.round(entity.lastSeen.y) : entity.target.y;
+            if (reversed) {
+                // ── FASE 2: a entidade FOGE; o jogador é o caçador ──
+                if (huntGraceTimer > 0) huntGraceTimer -= dt;
+                entity.state = 'flee';
+
+                // Estamina invertida: a presa sprinta quando o caçador está perto e
+                // recupera quando ganha distância; esgotada, anda devagar (alcançável).
+                const dPlayer = Math.hypot(entity.x - cam.x, entity.z - cam.z);
+                const threat = dPlayer < FLEE_SPRINT_DIST;
+                if (!threat) entityExhausted = false;
+                if (entityStamina <= 0) entityExhausted = true;
+                const sprinting = threat && !entityExhausted;
+                spd = sprinting ? SPD_FLEE_RUN : SPD_FLEE_WALK;
+                // sprintar gasta; recupera o fôlego só quando longe do caçador (>16). Perto e cansada,
+                // fica "ofegante" (estamina não sobe) -> a barra vermelha reflete a velocidade real.
+                if (sprinting) entityStamina = Math.max(0, entityStamina - dt);
+                else if (!threat) entityStamina = Math.min(10, entityStamina + dt * STAM_RECOVER);
+
+                // Alvo de fuga: reescolhe ao chegar, ao travar, se o caçador "tomou" o alvo, ou por tempo.
+                const reached = entity.fleeTarget && Math.hypot(entity.x - entity.fleeTarget.x, entity.z - entity.fleeTarget.z) < 2.2 && Math.abs(entity.y - entity.fleeTarget.y) < 1.6;
+                const playerTookTarget = entity.fleeTarget && Math.hypot(cam.x - entity.fleeTarget.x, cam.z - entity.fleeTarget.z) < dPlayer * 0.6;
+                entity.fleeRetime -= dt;
+                if (!entity.fleeTarget || reached || entity.stuck > 1.0 || playerTookTarget || entity.fleeRetime <= 0) {
+                    entity.fleeTarget = pickFleeTarget(); entity.fleeRetime = 1.5; entity.stuck = 0; entity.path = null;
+                }
+                tx = entity.fleeTarget.x; tz = entity.fleeTarget.z; goalY = entity.fleeTarget.y;
+            } else {
+                // ── FASE 1: a entidade CAÇA o jogador (perceber -> chase/search/wander) ──
+                const see = entity.visible;
+                if (see) {
+                    entity.lastSeen.x = cam.x; entity.lastSeen.y = cam.y; entity.lastSeen.z = cam.z;
+                    entity.state = 'chase'; entity.searchTimer = SEARCH_TIME;
+                } else if (entity.state === 'chase') {
+                    entity.state = 'search'; // acabou de perder a visão
+                }
+
+                if (entity.state === 'chase') { tx = cam.x; tz = cam.z; spd = SPD_CHASE; }
+                else if (entity.state === 'search') {
+                    tx = entity.lastSeen.x; tz = entity.lastSeen.z; spd = SPD_SEARCH;
+                    entity.searchTimer -= dt;
+                    if (entity.searchTimer <= 0 || Math.hypot(entity.x - tx, entity.z - tz) < 1.5) {
+                        entity.state = 'wander'; entity.target = pickWanderTarget(); entity.path = null;
+                    }
+                } else { // wander
+                    tx = entity.target.x; tz = entity.target.z; spd = SPD_WANDER;
+                    // chegou = perto no plano E no mesmo andar (senão repicaria antes de subir)
+                    const reached = Math.hypot(entity.x - tx, entity.z - tz) < 1.6 && Math.abs(entity.y - entity.target.y) < 1.6;
+                    if (reached || entity.stuck > 1.2) {
+                        entity.target = pickWanderTarget(); entity.stuck = 0; entity.path = null;
+                    }
+                }
+                goalY = entity.state === 'chase' ? Math.round(cam.y)
+                    : entity.state === 'search' ? Math.round(entity.lastSeen.y) : entity.target.y;
+            }
             entity.pathTimer -= dt;
             if (entity.pathTimer <= 0 || !entity.path || entity.pathIdx >= entity.path.length) {
-                entity.pathTimer = 0.45;
+                entity.pathTimer = reversed ? 0.3 : 0.45;
                 entity.path = findPath(Math.floor(entity.x), Math.round(entity.y), Math.floor(entity.z),
                     Math.floor(tx), goalY, Math.floor(tz));
                 entity.pathIdx = 0;
@@ -975,6 +1119,28 @@ void main(){
             // Direção (rumo ao waypoint)
             let dx = aimX - entity.x, dz = aimZ - entity.z;
             const dl = Math.hypot(dx, dz) || 1; dx /= dl; dz /= dl;
+
+            // Fase 2: a navegação do A* ignora o jogador, então a rota até um ponto distante
+            // pode cruzar por cima de você. Dois ajustes garantem que a presa nunca "venha pra cima":
+            if (reversed) {
+                const px = entity.x - cam.x, pz = entity.z - cam.z;
+                const pl = Math.hypot(px, pz) || 1;
+                const ax = px / pl, az = pz / pl;                      // unitário "para longe do jogador"
+                // 1) repulsão: empurra no sentido oposto, mais forte quanto mais perto
+                const rep = Math.max(0, 1 - pl / FLEE_SPRINT_DIST);    // 0 longe -> 1 colado
+                dx += ax * rep * 2.2; dz += az * rep * 2.2;
+                let nl = Math.hypot(dx, dz) || 1; dx /= nl; dz /= nl;
+                // 2) trava de não-aproximação: estando perto, zera a componente do movimento
+                //    rumo ao jogador — sobra só o deslize lateral/pra trás (nunca anda em sua direção)
+                if (pl < 12) {
+                    const toward = -(dx * ax + dz * az);              // >0 = indo em direção ao jogador
+                    if (toward > 0) {
+                        dx += ax * toward; dz += az * toward;
+                        nl = Math.hypot(dx, dz) || 1; dx /= nl; dz /= nl;
+                    }
+                }
+            }
+
             const mvx = dx * spd * dt, mvz = dz * spd * dt;
 
             // Gravidade
@@ -995,8 +1161,11 @@ void main(){
             // Travou? (pouco progresso apesar de querer andar) -> conta tempo p/ repensar
             if (moved < spd * dt * 0.3) entity.stuck += dt; else entity.stuck = 0;
 
-            // Pegou o jogador -> sequência de derrota
-            if (entity.state === 'chase' && Math.hypot(entity.x - cam.x, entity.z - cam.z) < CATCH_DIST) {
+            // Captura: fase 1 a entidade pega o jogador (derrota); fase 2 o jogador encosta nela (vitória)
+            const dCatch = Math.hypot(entity.x - cam.x, entity.z - cam.z);
+            if (reversed) {
+                if (huntGraceTimer <= 0 && dCatch < CATCH_DIST_HUNT) triggerVictory();
+            } else if (entity.state === 'chase' && dCatch < CATCH_DIST) {
                 triggerCaught();
             }
         }
@@ -1031,24 +1200,36 @@ void main(){
 
         // ── Vinheta de perseguição + tela de "pego" ─────────────────────────────────
         const vignetteEl = document.getElementById('vignette');
+        const vignetteHuntEl = document.getElementById('vignette-hunt');
         const caughtEl = document.getElementById('caught');
         const caughtMsg = document.getElementById('caught-msg');
         const caughtFlash = document.getElementById('caught-flash');
         // o flash de tela cheia usa o mesmo rosto da entidade
         if (entFace.getAttribute('src')) caughtFlash.src = entFace.src;
         entFace.addEventListener('load', () => { caughtFlash.src = entFace.src; });
-        let vigOpacity = 0;
+        let vigOpacity = 0, vigHuntOpacity = 0;
         let caught = false, caughtT = 0;
 
         function updateVignette(dt) {
+            // Vinheta vermelha (fase 1): perigo — cresce conforme o caçador se aproxima de você
             let target = 0;
-            if (!caught && locked && entity.state === 'chase') {
+            if (!caught && !reversed && locked && entity.state === 'chase') {
                 const d = Math.hypot(entity.x - cam.x, entity.z - cam.z);
                 const near = Math.max(0, Math.min(1, 1 - d / SIGHT)); // 0 longe, 1 colado
                 target = 0.18 + near * 0.72;                          // mais perto = mais intensa
             }
             vigOpacity += (target - vigOpacity) * Math.min(1, dt * 6);
             vignetteEl.style.opacity = vigOpacity.toFixed(3);
+
+            // Vinheta âmbar (fase 2): clima de caça — presente sempre, mais forte perto da presa
+            let huntTarget = 0;
+            if (!caught && !won && reversed && locked) {
+                const d = Math.hypot(entity.x - cam.x, entity.z - cam.z);
+                const near = Math.max(0, Math.min(1, 1 - d / SIGHT));
+                huntTarget = 0.20 + near * 0.55;
+            }
+            vigHuntOpacity += (huntTarget - vigHuntOpacity) * Math.min(1, dt * 6);
+            vignetteHuntEl.style.opacity = vigHuntOpacity.toFixed(3);
         }
 
         function triggerCaught() {
@@ -1078,13 +1259,46 @@ void main(){
             caughtMsg.style.display = 'none';
             caughtFlash.style.opacity = 0;
             canvas.style.transform = '';
-            vigOpacity = 0; vignetteEl.style.opacity = 0;
-            startWorld(genWorldBackrooms);
+            vigOpacity = 0; vignetteEl.style.opacity = 0; vigHuntOpacity = 0; vignetteHuntEl.style.opacity = 0;
+            startWorld(genWorldBackrooms); lockPointer();
         };
+
+        // ── Tela de vitória (jogador pegou a entidade) ──────────────────────────────
+        const victoryEl = document.getElementById('victory');
+        const victoryTimeEl = document.getElementById('victory-time');
+        function triggerVictory() {
+            if (won || caught) return;
+            won = true; gameRunning = false;
+            victoryTimeEl.textContent = fmtTime(performance.now() - gameStartTime);
+            victoryEl.style.display = 'flex';   // tela preta instantânea
+            document.exitPointerLock();
+        }
+        document.getElementById('victory-restart').onclick = () => {
+            won = false; victoryEl.style.display = 'none';
+            vigOpacity = 0; vignetteEl.style.opacity = 0; vigHuntOpacity = 0; vignetteHuntEl.style.opacity = 0;
+            startWorld(genWorldBackrooms); lockPointer();
+        };
+
+        // ── Banner de virada de fase (texto temporário que some sozinho) ────────────
+        const bannerEl = document.getElementById('phase-banner');
+        function showBanner(text, color) {
+            bannerEl.textContent = text; bannerEl.style.color = color; bannerEl.style.opacity = '1';
+            clearTimeout(bannerEl._t); bannerEl._t = setTimeout(() => { bannerEl.style.opacity = '0'; }, 2600);
+        }
+
+        // ── Pegou os 2 itens: A CAÇADA INVERTE — agora o jogador persegue a entidade ──
+        function startHunt() {
+            reversed = true;
+            entityStamina = 10; entityExhausted = false;
+            huntGraceTimer = HUNT_GRACE;   // respiro p/ a presa não ser pega no instante da virada
+            entity.state = 'flee'; entity.fleeTarget = null; entity.fleeRetime = 0; entity.path = null;
+            showBanner('Cace a entidade', 'rgba(215,205,60,0.97)');
+            // cronômetro continua correndo até a captura
+        }
 
         // ── Input ──────────────────────────────────────────────────────────────────
         const keys = {};
-        let locked = false;
+        let locked = false, started = false; // started: já entrou no jogo ao menos uma vez (controla o "Continuar")
 
         addEventListener('keydown', e => {
             keys[e.code] = true;
@@ -1096,7 +1310,27 @@ void main(){
         const overlay = document.getElementById('overlay');
         document.addEventListener('pointerlockchange', () => {
             locked = document.pointerLockElement === canvas;
-            overlay.style.display = (locked || caught) ? 'none' : 'flex';
+            if (locked) started = true;
+            overlay.style.display = (locked || caught || won) ? 'none' : 'flex';
+            // "Continuar" só aparece quando há uma partida em andamento pra retomar (após ESC)
+            btnResume.style.display = (started && gameRunning && !won && !caught) ? '' : 'none';
+        });
+
+        // Trava o ponteiro com segurança. SÓ deve ser chamado de dentro de um clique (gesto do
+        // usuário). Trata a Promise — senão vaza "Uncaught (in promise)" — e, se o navegador recusar
+        // por estar no cooldown logo após sair do lock, reagenda (sem isso, o 1º clique falha).
+        let lockTries = 0;
+        function lockPointer() {
+            if (document.pointerLockElement === canvas) { lockTries = 0; return; }
+            let p; try { p = canvas.requestPointerLock(); } catch (e) { return; }
+            if (p && typeof p.then === 'function') {
+                p.then(() => { lockTries = 0; })
+                 .catch(err => { if (err && err.name === 'SecurityError' && lockTries++ < 18) setTimeout(lockPointer, 100); });
+            }
+        }
+        // Se a trava falhar de vez (faltou gesto / cooldown), garante o menu visível pra novo clique.
+        document.addEventListener('pointerlockerror', () => {
+            if (document.pointerLockElement !== canvas && !caught && !won) overlay.style.display = 'flex';
         });
 
         document.addEventListener('mousemove', e => {
@@ -1110,25 +1344,28 @@ void main(){
 
         // ── Update ─────────────────────────────────────────────────────────────────
         function update(dt) {
-            if (!locked || caught) return;
+            if (!locked || caught || won) return;
             const crouching = keys['KeyC'];
 
-            // Stamina: correr gasta; recupera parado; esgotou, não corre
-            if (!keys['ShiftLeft'] && !keys['ShiftRight']) playerExhausted = false;
-            if (playerStamina <= 0) playerExhausted = true;
-            const running = (keys['ShiftLeft'] || keys['ShiftRight']) && !crouching && !playerExhausted;
-            const spd = (crouching ? 2.2 : running ? 8.5 : 5.0) * dt;
-            playerStamina = running ? Math.max(0, playerStamina - dt) : Math.min(10, playerStamina + dt * 2);
-            staminaBar.style.width = (playerStamina / 10 * 100) + '%';
+            let spd;
+            if (reversed) {
+                // FASE 2: o jogador caça com velocidade fixa (sem correr/estamina)
+                spd = PLAYER_HUNT_SPD * dt;
+            } else {
+                // FASE 1: estamina — correr gasta; recupera parado; esgotou, não corre
+                if (!keys['ShiftLeft'] && !keys['ShiftRight']) playerExhausted = false;
+                if (playerStamina <= 0) playerExhausted = true;
+                const running = (keys['ShiftLeft'] || keys['ShiftRight']) && !crouching && !playerExhausted;
+                spd = (crouching ? 2.2 : running ? 8.5 : 5.0) * dt;
+                playerStamina = running ? Math.max(0, playerStamina - dt) : Math.min(10, playerStamina + dt * 2);
+            }
+            // Barra: fase 1 = estamina do jogador (branca); fase 2 = estamina da presa (vermelha)
+            const sval = reversed ? entityStamina : playerStamina;
+            staminaBar.style.width = (sval / 10 * 100) + '%';
+            staminaBar.style.background = reversed ? 'rgba(220,70,60,0.85)' : 'rgba(255,255,255,0.8)';
 
             // Cronômetro
-            if (gameRunning) {
-                const el = performance.now() - gameStartTime;
-                const m = String(Math.floor(el / 60000)).padStart(2, '0');
-                const s = String(Math.floor((el % 60000) / 1000)).padStart(2, '0');
-                const ms = String(Math.floor(el % 1000)).padStart(3, '0');
-                timerEl.textContent = `${m}:${s}:${ms}`;
-            }
+            if (gameRunning) timerEl.textContent = fmtTime(performance.now() - gameStartTime);
 
             let mx = 0, mz = 0;
             if (keys['KeyW']) { mx += Math.sin(cam.yaw); mz -= Math.cos(cam.yaw); }
@@ -1183,7 +1420,7 @@ void main(){
             if (uiChanged) {
                 itemsContainer.innerHTML = '';
                 for (const t of [...collectedTypes].sort((a, b) => a - b)) itemsContainer.appendChild(mkItemPreview(t));
-                if (itemsCollected === 2) gameRunning = false; // pegou os dois -> trava o cronômetro
+                if (itemsCollected === 2 && !reversed) startHunt(); // pegou os dois -> a caçada inverte
             }
         }
 
@@ -1286,6 +1523,28 @@ void main(){
                     el.style.display = 'block';
                 }
             }
+
+            // Rastreador da presa (fase 2): aponta onde a entidade está, mesmo ocluída/atrás
+            const mEnt = document.getElementById('marker-ent');
+            if (reversed && !won && !caught) {
+                const ex2 = entity.x, ey2 = entity.y + ENT_H * 0.6, ez2 = entity.z;
+                const cw = ex2 * mvp[3] + ey2 * mvp[7] + ez2 * mvp[11] + mvp[15];
+                let px, py;
+                if (cw <= 0.01) { px = canvas.width * 0.5; py = canvas.height - 44; } // atrás da câmera
+                else {
+                    px = ((ex2 * mvp[0] + ey2 * mvp[4] + ez2 * mvp[8] + mvp[12]) / cw * 0.5 + 0.5) * canvas.width;
+                    py = (-(ex2 * mvp[1] + ey2 * mvp[5] + ez2 * mvp[9] + mvp[13]) / cw * 0.5 + 0.5) * canvas.height;
+                }
+                const M = 26;
+                px = Math.max(M, Math.min(canvas.width - M, px));
+                py = Math.max(M, Math.min(canvas.height - M, py));
+                const dist = Math.hypot(cam.x - entity.x, cam.y - entity.y, cam.z - entity.z);
+                mEnt.textContent = `◈ ${dist.toFixed(0)}m`;
+                mEnt.style.left = px + 'px'; mEnt.style.top = py + 'px';
+                mEnt.style.display = 'block';
+            } else {
+                mEnt.style.display = 'none';
+            }
         }
 
         // ── Init + Loop ────────────────────────────────────────────────────────────
@@ -1312,15 +1571,20 @@ void main(){
             // Reinicia a partida (cronômetro, stamina, itens)
             gameStartTime = performance.now(); gameRunning = true;
             playerStamina = 10; playerExhausted = false;
+            reversed = false; won = false; huntGraceTimer = 0;
+            entityStamina = 10; entityExhausted = false;
+            staminaBar.style.background = 'rgba(255,255,255,0.8)';
+            bannerEl.style.opacity = '0';
+            vigOpacity = 0; vigHuntOpacity = 0;
             collectedTypes = []; itemsContainer.innerHTML = '';
             placeEntity();
             rebuildAllDirty();
-            btnResume.style.display = '';
-            canvas.requestPointerLock();
+            // NÃO trava o ponteiro aqui: requestPointerLock só é permitido a partir de um clique
+            // (gesto do usuário). Quem chama via clique usa lockPointer(); o auto-load deixa o menu.
         }
 
-        document.getElementById('btn-cacada').onclick = () => startWorld(genWorldBackrooms);
-        btnResume.onclick = () => canvas.requestPointerLock();
+        document.getElementById('btn-cacada').onclick = () => { startWorld(genWorldBackrooms); lockPointer(); };
+        btnResume.onclick = () => lockPointer();
 
         // Auto-load: abre direto no modo Caçada
         startWorld(genWorldBackrooms);
