@@ -99,7 +99,7 @@
         #xhair::after {
             content: '';
             position: absolute;
-            background: rgba(255, 255, 255, 0.85);
+            background: var(--xc, rgba(255, 255, 255, 0.85));
             left: 50%;
             top: 50%;
             transform: translate(-50%, -50%);
@@ -309,6 +309,36 @@
             pointer-events: none;
             white-space: nowrap;
         }
+
+        /* Flash da virada de fase + indicador "retomando…" + melhor tempo na vitória */
+        #flash {
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: 8;
+            opacity: 0;
+            background: #fff;
+        }
+
+        #resuming {
+            position: fixed;
+            inset: 0;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 9;
+            color: rgba(255, 255, 255, 0.55);
+            font: 13px 'Courier New';
+            letter-spacing: 4px;
+            text-transform: uppercase;
+            pointer-events: none;
+        }
+
+        #victory .vbest {
+            margin-top: 6px;
+            font: 13px 'Courier New';
+            letter-spacing: 2px;
+        }
     </style>
 </head>
 
@@ -351,6 +381,8 @@
 
     <div id="vignette"></div>
     <div id="vignette-hunt"></div>
+    <div id="flash"></div>
+    <div id="resuming">retomando…</div>
 
     <div id="caught">
         <div id="caught-msg">
@@ -366,6 +398,7 @@
         <div>
             <div class="vtime-label">tempo da caçada</div>
             <div class="vtime" id="victory-time">00:00:000</div>
+            <div class="vbest" id="victory-best"></div>
         </div>
         <button id="victory-restart" class="menu-btn">Nova Caçada</button>
     </div>
@@ -384,7 +417,94 @@
         const gl = canvas.getContext('webgl');
         if (!gl) { alert('WebGL não disponível.'); }
 
+        // ── Áudio procedural (Web Audio API) — gerado por código, sem arquivos ──────
+        const Sound = (() => {
+            const VOL = 0.5;                       // volume mestre (ajuste fino aqui)
+            let ctx = null, master = null, ambGain = null, muted = false;
+            let beatLevel = 0, beatAcc = 0;
+            const now = () => ctx.currentTime;
+
+            function init() {                      // chamar de dentro de um clique (libera o áudio)
+                if (ctx) { if (ctx.state === 'suspended') ctx.resume(); return; }
+                const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
+                ctx = new AC();
+                master = ctx.createGain(); master.gain.value = muted ? 0 : VOL; master.connect(ctx.destination);
+                ambGain = ctx.createGain(); ambGain.gain.value = 0; ambGain.connect(master);
+                // drone grave (dois osc em leve batimento) + zumbido de luz fluorescente com flicker
+                [47, 47.6].forEach(f => { const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = f; const g = ctx.createGain(); g.gain.value = 0.14; o.connect(g); g.connect(ambGain); o.start(); });
+                const bz = ctx.createOscillator(); bz.type = 'sawtooth'; bz.frequency.value = 120;
+                const bf = ctx.createBiquadFilter(); bf.type = 'lowpass'; bf.frequency.value = 300;
+                const bg = ctx.createGain(); bg.gain.value = 0.04; bz.connect(bf); bf.connect(bg); bg.connect(ambGain); bz.start();
+                const fl = ctx.createOscillator(); fl.type = 'sine'; fl.frequency.value = 8.3;
+                const flg = ctx.createGain(); flg.gain.value = 0.015; fl.connect(flg); flg.connect(bg.gain); fl.start();
+            }
+            function setActive(on) {               // liga/desliga o ambiente (toca só durante o jogo)
+                if (!ctx) return;
+                ambGain.gain.cancelScheduledValues(now());
+                ambGain.gain.setValueAtTime(ambGain.gain.value, now());
+                ambGain.gain.linearRampToValueAtTime(on ? 1 : 0, now() + (on ? 0.8 : 0.4));
+            }
+            function tone(freq, dur, type, peak, delay, slideTo) {
+                if (!ctx || muted) return; const t = now() + (delay || 0);
+                const o = ctx.createOscillator(); o.type = type || 'sine'; o.frequency.setValueAtTime(freq, t);
+                if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
+                const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t);
+                g.gain.exponentialRampToValueAtTime(peak, t + 0.012);
+                g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+                o.connect(g); g.connect(master); o.start(t); o.stop(t + dur + 0.03);
+            }
+            function noise(dur, peak, lp) {
+                if (!ctx || muted) return; const t = now();
+                const n = Math.max(1, Math.floor(ctx.sampleRate * dur)); const buf = ctx.createBuffer(1, n, ctx.sampleRate);
+                const d = buf.getChannelData(0); for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+                const s = ctx.createBufferSource(); s.buffer = buf;
+                const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = lp || 1500;
+                const g = ctx.createGain(); g.gain.setValueAtTime(peak, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+                s.connect(f); f.connect(g); g.connect(master); s.start(t); s.stop(t + dur);
+            }
+            function tension(level, dt) {           // batimento cardíaco que acelera conforme a entidade se aproxima (fase 1)
+                beatLevel += (level - beatLevel) * Math.min(1, dt * 4);
+                if (!ctx || muted || beatLevel < 0.06) { beatAcc = 0; return; }
+                const period = 60 / (50 + beatLevel * 95);  // ~50 bpm calmo -> ~145 em pânico
+                beatAcc += dt;
+                if (beatAcc >= period) {
+                    beatAcc = 0; const v = 0.14 + beatLevel * 0.5;   // mais audível
+                    tone(72, 0.16, 'sine', v, 0, 44);                // "tum" (lub), thump com queda de pitch
+                    tone(64, 0.20, 'sine', v * 0.7, 0.14, 40);       // "tum" (dub), mais fraco logo após
+                }
+            }
+            return {
+                init, setActive, tension,
+                collect: () => { tone(660, 0.12, 'triangle', 0.16); tone(990, 0.2, 'triangle', 0.14, 0.08); },
+                turn:    () => { tone(180, 0.5, 'sawtooth', 0.12, 0, 420); noise(0.5, 0.05, 1200); tone(330, 0.6, 'triangle', 0.1, 0.05); },
+                victory: () => { [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.5, 'triangle', 0.16, i * 0.11)); },
+                death:   () => {                                       // chiado distorcido, constante e agressivo, do tamanho da animação de morte (~1.2s)
+                    if (!ctx || muted) return; const t = now(), dur = 1.2;
+                    const n = Math.floor(ctx.sampleRate * dur), buf = ctx.createBuffer(1, n, ctx.sampleRate), dch = buf.getChannelData(0);
+                    for (let i = 0; i < n; i++) dch[i] = Math.random() * 2 - 1;     // ruído branco contínuo
+                    const src = ctx.createBufferSource(); src.buffer = buf;
+                    const ws = ctx.createWaveShaper(), curve = new Float32Array(256);
+                    for (let i = 0; i < 256; i++) { const x = i / 128 - 1; curve[i] = Math.tanh(x * 6); } ws.curve = curve; // distorção agressiva
+                    const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 650;
+                    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 2400; bp.Q.value = 0.6;
+                    const g = ctx.createGain();
+                    g.gain.setValueAtTime(0.0001, t);
+                    g.gain.exponentialRampToValueAtTime(0.34, t + 0.02);            // ataque imediato
+                    g.gain.setValueAtTime(0.34, t + dur - 0.18);                    // mantém constante
+                    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);           // corta junto com a animação
+                    src.connect(ws); ws.connect(hp); hp.connect(bp); bp.connect(g); g.connect(master);
+                    src.start(t); src.stop(t + dur + 0.02);
+                    tone(58, dur, 'sawtooth', 0.07, 0, 40);                         // sub-grave por baixo dá peso ao chiado
+                },
+                toggleMute: () => { muted = !muted; if (master) { master.gain.cancelScheduledValues(now()); master.gain.setValueAtTime(muted ? 0 : VOL, now()); } return muted; },
+                ready: () => !!ctx
+            };
+        })();
+
         // ── Shaders ────────────────────────────────────────────────────────────────
+        // Neblina de profundidade: começa perto (FOG_START) e satura em FOG_START+FOG_RANGE,
+        // dissolvendo o que está longe na cor escura do fog. Compartilhado com drawEntity.
+        const FOG_START = 9, FOG_RANGE = 38;
         const VS = `
 attribute vec3 aPos; attribute vec2 aUV; attribute float aLight;
 uniform mat4 uMVP;
@@ -392,7 +512,7 @@ varying vec2 vUV; varying float vLight; varying float vFog;
 void main(){
   gl_Position = uMVP * vec4(aPos,1.0);
   vUV = aUV; vLight = aLight;
-  vFog = clamp((gl_Position.w - 80.0)/140.0, 0.0, 1.0);
+  vFog = clamp((gl_Position.w - ${FOG_START.toFixed(1)})/${FOG_RANGE.toFixed(1)}, 0.0, 1.0);
 }`;
 
         const FS = `
@@ -403,7 +523,7 @@ varying vec2 vUV; varying float vLight; varying float vFog;
 void main(){
   vec4 c = texture2D(uTex, vUV);
   if (c.a < 0.05) discard;
-  gl_FragColor = vec4(mix(c.rgb*vLight, uFog, vFog), c.a);
+  gl_FragColor = vec4(mix(c.rgb*vLight*0.75, uFog, vFog), c.a);
 }`;
 
         const VS2 = `attribute vec3 aPos; uniform mat4 uMVP; void main(){ gl_Position=uMVP*vec4(aPos,1.0); }`;
@@ -630,7 +750,7 @@ void main(){
             worldSeed = (Math.random() * 0x7fffffff) | 0;
             const rng = mulberry32(worldSeed);
             blocks.fill(0);
-            fogColor = [0.18, 0.19, 0.22]; // ar cinza pesado de garagem
+            fogColor = [0.025, 0.026, 0.032]; // neblina quase preta — a escuridão engole o que está longe
 
             const CELL = 5, WALL = 1, P = CELL + WALL;
             const INT = 4, LH = INT + 2;     // interior + divisória de 2 lajes (teto + chão)
@@ -846,12 +966,12 @@ void main(){
         // + rosto PNG (face.png, ao lado do index.html). Só aparece com linha de visão
         // (serve de oclusão simples). Estados: wander -> chase -> search -> wander.
         const ENT_EYE = 1.5, ENT_H = 2.2, ENT_R = 0.3, BODY_ASPECT = 318 / 1108;
-        const SPD_WANDER = 2.6, SPD_SEARCH = 5.2, SPD_CHASE = 6.8; // perseguição: > andar(5.0), < correr(8.5)
-        const SIGHT = 42, SEARCH_TIME = 4.0, CATCH_DIST = 0.95;
+        const SPD_WANDER = 2.6, SPD_SEARCH = 5.4, SPD_CHASE = 7.0; // perseguição: > andar(5.0), < correr(8.0)
+        const SIGHT = 42, SEARCH_TIME = 5.0, CATCH_DIST = 0.95;   // procura por mais tempo após perder a visão
         // ── Fase 2 (caçada invertida): jogador com velocidade fixa, entidade com estamina ──
         const PLAYER_HUNT_SPD = 6.5;                       // velocidade fixa do jogador caçador
-        const SPD_FLEE_RUN = 7.5, SPD_FLEE_WALK = 3.5;     // presa: sprintando vs exausta
-        const FLEE_SPRINT_DIST = 16, STAM_RECOVER = 1.5;   // sprinta se o caçador <16 blocos; recupera 1.5/s
+        const SPD_FLEE_RUN = 7.8, SPD_FLEE_WALK = 4.0;     // presa: sprintando (foge de você) vs exausta (você alcança)
+        const FLEE_SPRINT_DIST = 16, STAM_RECOVER = 1.2;   // sprinta se o caçador <16 blocos; recupera 1.2/s longe, bem menos colado
         const CATCH_DIST_HUNT = 1.2, HUNT_GRACE = 1.2;     // encostar p/ vencer; respiro inicial da presa
         let entSpawnHint = null, navFloorY = [];
         const entity = {
@@ -1047,14 +1167,14 @@ void main(){
                 // recupera quando ganha distância; esgotada, anda devagar (alcançável).
                 const dPlayer = Math.hypot(entity.x - cam.x, entity.z - cam.z);
                 const threat = dPlayer < FLEE_SPRINT_DIST;
-                if (!threat) entityExhausted = false;
                 if (entityStamina <= 0) entityExhausted = true;
+                if (entityStamina >= 3.5) entityExhausted = false;   // recuperou fôlego -> volta a poder disparar (histerese)
                 const sprinting = threat && !entityExhausted;
                 spd = sprinting ? SPD_FLEE_RUN : SPD_FLEE_WALK;
-                // sprintar gasta; recupera o fôlego só quando longe do caçador (>16). Perto e cansada,
-                // fica "ofegante" (estamina não sobe) -> a barra vermelha reflete a velocidade real.
+                // sprintar gasta; senão recupera SEMPRE — devagar com o caçador colado (<16), normal quando longe.
+                // assim a presa recupera o fôlego e volta a fugir (vai-e-vem) em vez de ficar lenta de vez.
                 if (sprinting) entityStamina = Math.max(0, entityStamina - dt);
-                else if (!threat) entityStamina = Math.min(10, entityStamina + dt * STAM_RECOVER);
+                else entityStamina = Math.min(10, entityStamina + dt * (threat ? STAM_RECOVER * 0.3 : STAM_RECOVER));
 
                 // Alvo de fuga: reescolhe ao chegar, ao travar, se o caçador "tomou" o alvo, ou por tempo.
                 const reached = entity.fleeTarget && Math.hypot(entity.x - entity.fleeTarget.x, entity.z - entity.fleeTarget.z) < 2.2 && Math.abs(entity.y - entity.fleeTarget.y) < 1.6;
@@ -1190,8 +1310,13 @@ void main(){
             if (ph < 6) { entEl.style.display = 'none'; return; }
             if (ph > H * 1.8) ph = H * 1.8;   // limita p/ não explodir a rasterização quando coladíssima
             const pw = ph * BODY_ASPECT;
+            // o billboard é DOM (não passa pelo fog do shader) -> atenua na neblina igual ao cenário,
+            // pra a entidade emergir/sumir no nevoeiro de forma coerente
+            const fogFade = 1 - Math.max(0, Math.min(1, (feet.w - FOG_START) / FOG_RANGE));
+            const opv = op * fogFade;
+            if (opv < 0.03) { entEl.style.display = 'none'; return; }
             entEl.style.display = 'block';
-            entEl.style.opacity = op.toFixed(2);
+            entEl.style.opacity = opv.toFixed(2);
             entEl.style.height = ph + 'px';
             entEl.style.width = pw + 'px';
             entEl.style.left = (cxs - pw / 2) + 'px';
@@ -1201,25 +1326,36 @@ void main(){
         // ── Vinheta de perseguição + tela de "pego" ─────────────────────────────────
         const vignetteEl = document.getElementById('vignette');
         const vignetteHuntEl = document.getElementById('vignette-hunt');
+        const xhairEl = document.getElementById('xhair');
+        const flashEl = document.getElementById('flash');
+        const resumingEl = document.getElementById('resuming');
+        // Flash de tela cheia (marca a virada da caça) e indicador "retomando…" (mascara o cooldown pós-ESC)
+        function flashScreen(color) {
+            flashEl.style.transition = 'none'; flashEl.style.background = color || '#fff'; flashEl.style.opacity = '1';
+            requestAnimationFrame(() => { flashEl.style.transition = 'opacity 0.5s ease-out'; flashEl.style.opacity = '0'; });
+        }
+        function showResuming() { resumingEl.style.display = 'flex'; }
+        function hideResuming() { resumingEl.style.display = 'none'; }
         const caughtEl = document.getElementById('caught');
         const caughtMsg = document.getElementById('caught-msg');
         const caughtFlash = document.getElementById('caught-flash');
         // o flash de tela cheia usa o mesmo rosto da entidade
         if (entFace.getAttribute('src')) caughtFlash.src = entFace.src;
         entFace.addEventListener('load', () => { caughtFlash.src = entFace.src; });
-        let vigOpacity = 0, vigHuntOpacity = 0;
+        let vigOpacity = 0, vigHuntOpacity = 0, walkBob = 0, bobTime = 0;
         let caught = false, caughtT = 0;
 
         function updateVignette(dt) {
             // Vinheta vermelha (fase 1): perigo — cresce conforme o caçador se aproxima de você
-            let target = 0;
+            let target = 0, danger = 0;
             if (!caught && !reversed && locked && entity.state === 'chase') {
                 const d = Math.hypot(entity.x - cam.x, entity.z - cam.z);
-                const near = Math.max(0, Math.min(1, 1 - d / SIGHT)); // 0 longe, 1 colado
-                target = 0.18 + near * 0.72;                          // mais perto = mais intensa
+                danger = Math.max(0, Math.min(1, 1 - d / SIGHT)); // 0 longe, 1 colado
+                target = 0.18 + danger * 0.72;                    // mais perto = mais intensa
             }
             vigOpacity += (target - vigOpacity) * Math.min(1, dt * 6);
             vignetteEl.style.opacity = vigOpacity.toFixed(3);
+            Sound.tension(danger, dt); // batimento cardíaco acompanha o perigo
 
             // Vinheta âmbar (fase 2): clima de caça — presente sempre, mais forte perto da presa
             let huntTarget = 0;
@@ -1236,6 +1372,7 @@ void main(){
             if (caught) return;
             caught = true; caughtT = 0; gameRunning = false;
             caughtEl.style.display = 'flex';
+            Sound.death();
             document.exitPointerLock();
         }
 
@@ -1260,23 +1397,33 @@ void main(){
             caughtFlash.style.opacity = 0;
             canvas.style.transform = '';
             vigOpacity = 0; vignetteEl.style.opacity = 0; vigHuntOpacity = 0; vignetteHuntEl.style.opacity = 0;
-            startWorld(genWorldBackrooms); lockPointer();
+            Sound.init(); startWorld(genWorldBackrooms); lockPointer();
         };
 
         // ── Tela de vitória (jogador pegou a entidade) ──────────────────────────────
         const victoryEl = document.getElementById('victory');
         const victoryTimeEl = document.getElementById('victory-time');
+        const victoryBestEl = document.getElementById('victory-best');
+        const BEST_KEY = 'brokengl_best_ms';
         function triggerVictory() {
             if (won || caught) return;
             won = true; gameRunning = false;
-            victoryTimeEl.textContent = fmtTime(performance.now() - gameStartTime);
+            const ms = performance.now() - gameStartTime;
+            victoryTimeEl.textContent = fmtTime(ms);
+            // Recorde persistente (localStorage): mostra o melhor tempo ou anuncia novo recorde
+            let best = NaN; try { best = parseFloat(localStorage.getItem(BEST_KEY)); } catch (e) {}
+            const isRecord = !(best > 0) || ms < best;
+            if (isRecord) { best = ms; try { localStorage.setItem(BEST_KEY, String(Math.round(ms))); } catch (e) {} }
+            victoryBestEl.textContent = isRecord ? '★ novo recorde!' : 'melhor: ' + fmtTime(best);
+            victoryBestEl.style.color = isRecord ? 'rgba(215,205,60,0.97)' : 'rgba(255,255,255,0.45)';
+            Sound.victory();
             victoryEl.style.display = 'flex';   // tela preta instantânea
             document.exitPointerLock();
         }
         document.getElementById('victory-restart').onclick = () => {
             won = false; victoryEl.style.display = 'none';
             vigOpacity = 0; vignetteEl.style.opacity = 0; vigHuntOpacity = 0; vignetteHuntEl.style.opacity = 0;
-            startWorld(genWorldBackrooms); lockPointer();
+            Sound.init(); startWorld(genWorldBackrooms); lockPointer();
         };
 
         // ── Banner de virada de fase (texto temporário que some sozinho) ────────────
@@ -1293,6 +1440,7 @@ void main(){
             huntGraceTimer = HUNT_GRACE;   // respiro p/ a presa não ser pega no instante da virada
             entity.state = 'flee'; entity.fleeTarget = null; entity.fleeRetime = 0; entity.path = null;
             showBanner('Cace a entidade', 'rgba(215,205,60,0.97)');
+            Sound.turn(); flashScreen('rgba(215,190,60,0.5)'); // marca dramática da virada
             // cronômetro continua correndo até a captura
         }
 
@@ -1303,6 +1451,7 @@ void main(){
         addEventListener('keydown', e => {
             keys[e.code] = true;
             if (e.key === 'ç' || e.key === 'Ç') showMarkers = !showMarkers; // tecla secreta: marcadores dos itens
+            if (e.code === 'KeyM') showBanner(Sound.toggleMute() ? 'áudio: off' : 'áudio: on', 'rgba(255,255,255,0.9)'); // mudo
             if (e.code === 'Tab' || e.code === 'Space') e.preventDefault();
         });
         addEventListener('keyup', e => { keys[e.code] = false; });
@@ -1311,6 +1460,8 @@ void main(){
         document.addEventListener('pointerlockchange', () => {
             locked = document.pointerLockElement === canvas;
             if (locked) started = true;
+            Sound.setActive(locked);             // ambiente sonoro só durante o jogo
+            if (locked) hideResuming();          // entrou no jogo: some o "retomando…"
             overlay.style.display = (locked || caught || won) ? 'none' : 'flex';
             // "Continuar" só aparece quando há uma partida em andamento pra retomar (após ESC)
             btnResume.style.display = (started && gameRunning && !won && !caught) ? '' : 'none';
@@ -1325,7 +1476,7 @@ void main(){
             let p; try { p = canvas.requestPointerLock(); } catch (e) { return; }
             if (p && typeof p.then === 'function') {
                 p.then(() => { lockTries = 0; })
-                 .catch(err => { if (err && err.name === 'SecurityError' && lockTries++ < 18) setTimeout(lockPointer, 100); });
+                 .catch(err => { if (err && err.name === 'SecurityError' && lockTries++ < 18) { showResuming(); setTimeout(lockPointer, 100); } });
             }
         }
         // Se a trava falhar de vez (faltou gesto / cooldown), garante o menu visível pra novo clique.
@@ -1352,12 +1503,13 @@ void main(){
                 // FASE 2: o jogador caça com velocidade fixa (sem correr/estamina)
                 spd = PLAYER_HUNT_SPD * dt;
             } else {
-                // FASE 1: estamina — correr gasta; recupera parado; esgotou, não corre
-                if (!keys['ShiftLeft'] && !keys['ShiftRight']) playerExhausted = false;
+                // FASE 1: estamina — correr gasta; recupera ao não correr. Esgotou (0) trava o correr ATÉ
+                // recuperar um fôlego mínimo (histerese) — senão dava pra "spammar" Shift e correr sem parar.
                 if (playerStamina <= 0) playerExhausted = true;
+                if (playerStamina >= 3) playerExhausted = false;
                 const running = (keys['ShiftLeft'] || keys['ShiftRight']) && !crouching && !playerExhausted;
-                spd = (crouching ? 2.2 : running ? 8.5 : 5.0) * dt;
-                playerStamina = running ? Math.max(0, playerStamina - dt) : Math.min(10, playerStamina + dt * 2);
+                spd = (crouching ? 2.2 : running ? 8.0 : 5.0) * dt;
+                playerStamina = running ? Math.max(0, playerStamina - dt) : Math.min(10, playerStamina + dt * 1.6);
             }
             // Barra: fase 1 = estamina do jogador (branca); fase 2 = estamina da presa (vermelha)
             const sval = reversed ? entityStamina : playerStamina;
@@ -1414,7 +1566,7 @@ void main(){
                 it.rot += dt * 1.5;
                 const dx = cam.x - it.x, dy = (cam.y + eyeOffset) - it.y, dz = cam.z - it.z;
                 if (dx * dx + dy * dy + dz * dz < 4.0) { // raio ~2 blocos
-                    collectedTypes.push(it.type); itemsList.splice(i, 1); itemsCollected++; uiChanged = true;
+                    collectedTypes.push(it.type); itemsList.splice(i, 1); itemsCollected++; uiChanged = true; Sound.collect();
                 }
             }
             if (uiChanged) {
@@ -1422,6 +1574,20 @@ void main(){
                 for (const t of [...collectedTypes].sort((a, b) => a - b)) itemsContainer.appendChild(mkItemPreview(t));
                 if (itemsCollected === 2 && !reversed) startHunt(); // pegou os dois -> a caçada inverte
             }
+
+            // Headbob sutil ao andar (acelera correndo)
+            const moving = (mx || mz) && cam.onGround;
+            walkBob += ((moving ? 1 : 0) - walkBob) * Math.min(1, dt * 8);
+            bobTime += dt * ((keys['ShiftLeft'] || keys['ShiftRight']) && !reversed ? 14 : 10);
+
+            // Crosshair contextual: amarelo perto de um item (fase 1), verde perto da presa (fase 2)
+            let xc = 'rgba(255,255,255,0.85)';
+            if (reversed) {
+                if (Math.hypot(cam.x - entity.x, cam.z - entity.z) < 3) xc = 'rgba(120,230,140,0.95)';
+            } else {
+                for (const it of itemsList) { const ix = cam.x - it.x, iz = cam.z - it.z; if (ix * ix + iz * iz < 6.25) { xc = 'rgba(225,210,70,0.95)'; break; } }
+            }
+            xhairEl.style.setProperty('--xc', xc);
         }
 
         // ── Ícone de item coletado (HUD) ────────────────────────────────────────────
@@ -1457,7 +1623,7 @@ void main(){
             gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
             const proj = mat4Persp(75 * Math.PI / 180, canvas.width / canvas.height, 0.05, 300);
-            const ex = cam.x, ey = cam.y + eyeOffset, ez = cam.z;
+            const ex = cam.x, ey = cam.y + eyeOffset + Math.sin(bobTime) * 0.045 * walkBob, ez = cam.z;
             const tx = ex + Math.sin(cam.yaw) * Math.cos(cam.pitch);
             const ty = ey + Math.sin(cam.pitch);
             const tz = ez - Math.cos(cam.yaw) * Math.cos(cam.pitch);
@@ -1583,8 +1749,8 @@ void main(){
             // (gesto do usuário). Quem chama via clique usa lockPointer(); o auto-load deixa o menu.
         }
 
-        document.getElementById('btn-cacada').onclick = () => { startWorld(genWorldBackrooms); lockPointer(); };
-        btnResume.onclick = () => lockPointer();
+        document.getElementById('btn-cacada').onclick = () => { Sound.init(); startWorld(genWorldBackrooms); lockPointer(); };
+        btnResume.onclick = () => { Sound.init(); lockPointer(); };
 
         // Auto-load: abre direto no modo Caçada
         startWorld(genWorldBackrooms);
